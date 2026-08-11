@@ -917,15 +917,12 @@ class ClipboardIndicator extends PanelMenu.Button {
   }
 
   _queryClipboard() {
-    console.error(this.uuid, 'Querying clipboard...');
     if (this._shouldAbortClipboardQuery(St.Clipboard.CLIPBOARD)) {
-      console.error(this.uuid, 'Clipboard query aborted.');
       return;
     }
 
     try {
       const mimetypes = Clipboard.get_mimetypes(St.ClipboardType.CLIPBOARD);
-      console.error(this.uuid, 'Clipboard mimetypes:', mimetypes ? mimetypes.join(', ') : 'none');
       const hasImage = mimetypes && (
         mimetypes.includes('image/png') ||
         mimetypes.includes('image/jpeg') ||
@@ -934,20 +931,17 @@ class ClipboardIndicator extends PanelMenu.Button {
 
       if (hasImage) {
         const mime = mimetypes.includes('image/png') ? 'image/png' : (mimetypes.includes('image/jpeg') ? 'image/jpeg' : 'image/bmp');
-        console.error(this.uuid, 'Fetching image content for mime:', mime);
-        Clipboard.get_content(St.ClipboardType.CLIPBOARD, mime, (_, bytes) => {
-          console.error(this.uuid, 'Image content received, size:', bytes ? bytes.get_size() : 'null');
+        Clipboard.get_content(St.ClipboardType.CLIPBOARD, mime, (clipboard, mimeType, bytes) => {
           if (bytes && bytes.get_size() > 0) {
-            this._processImageContent(bytes, mime, true);
+            this._processImageContent(bytes, mimeType, true);
           } else {
-            console.error(this.uuid, 'Image content empty, falling back to text.');
             this._queryClipboardText();
           }
         });
         return;
       }
     } catch (e) {
-      console.error(this.uuid, 'Failed to query mimetypes:', e);
+      console.log(this.uuid, 'Failed to query mimetypes:', e);
     }
 
     this._queryClipboardText();
@@ -960,7 +954,6 @@ class ClipboardIndicator extends PanelMenu.Button {
   }
 
   _processImageContent(bytes, mimeType, selectEntry) {
-    console.error(this.uuid, '_processImageContent called, bytes size:', bytes.get_size());
     if (this._debouncing > 0) {
       this._debouncing--;
       return;
