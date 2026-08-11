@@ -1,9 +1,12 @@
 import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
+
+
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
@@ -900,7 +903,7 @@ class ClipboardIndicator extends PanelMenu.Button {
 
     if (
       IGNORE_PASSWORD_MIMES &&
-      Clipboard.get_mimetypes(kind).includes(
+      (Clipboard.get_mimetypes(kind) || []).includes(
         // Note that we should check for the value "secret" but there don't appear to be any other
         // values so it's not worth the trouble right now.
         'x-kde-passwordManagerHint',
@@ -968,6 +971,8 @@ class ClipboardIndicator extends PanelMenu.Button {
     const imagesDir = GLib.build_filenamev([GLib.get_user_cache_dir(), this.uuid, 'images']);
     GLib.mkdir_with_parents(imagesDir, 0o775);
     const filePath = GLib.build_filenamev([imagesDir, fileName]);
+
+    console.log(this.uuid, 'Processing image content, hash:', hash, 'path:', filePath);
 
     let entry =
       this.entries.findImageItem(hash) ||
@@ -1484,6 +1489,7 @@ const ClipboardIndicatorObj = GObject.registerClass(ClipboardIndicator);
 
 export default class ClipboardHistoryExtension extends Extension {
   enable() {
+    dbgLog('ClipboardHistoryExtension enable() called');
     this.indicatorName = `${this.metadata.name} Indicator`;
 
     Store.init(this.uuid);
@@ -1493,6 +1499,7 @@ export default class ClipboardHistoryExtension extends Extension {
   }
 
   disable() {
+    dbgLog('ClipboardHistoryExtension disable() called');
     this.clipboardIndicator.destroy();
     this.clipboardIndicator = undefined;
 
