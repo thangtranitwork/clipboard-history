@@ -1,5 +1,5 @@
 {
-  "description": "Gnome Clipboard History is a clipboard manager GNOME extension that saves items (text and images) you've copied into an easily accessible, searchable centered panel.",
+  "description": "Enhanced GNOME Shell clipboard history extension with image support, centered palette layout, timestamps, and quick search.",
   "gettext-domain": "clipboard-history@alexsaveau.dev",
   "name": "Clipboard History",
   "settings-schema": "org.gnome.shell.extensions.clipboard-history",

@@ -1262,11 +1262,9 @@ class ClipboardIndicator extends PanelMenu.Button {
     this._debouncing = 0;
 
     this.selection = Shell.Global.get().get_display().get_selection();
-    console.error(this.uuid, '_setupSelectionChangeListener connected, selection:', this.selection);
     this._selectionOwnerChangedId = this.selection.connect(
       'owner-changed',
       (_, selectionType) => {
-        console.error(this.uuid, 'Selection owner-changed fired, type:', selectionType);
         if (selectionType === Meta.SelectionType.SELECTION_CLIPBOARD) {
           this._queryClipboard();
         } else if (
