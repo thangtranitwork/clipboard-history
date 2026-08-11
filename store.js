@@ -195,7 +195,7 @@ function _consumeStream(stream, state, callback) {
           node.type = DS.TYPE_IMAGE;
           node.imageFileName = imageFileName || '';
           node.imagePath = GLib.build_filenamev([IMAGES_DIR, imageFileName || '']);
-          node.imageHash = imageFileName ? imageFileName.replace('.png', '') : '';
+          node.imageHash = imageFileName ? imageFileName.replace(/\.[^/.]+$/, '') : '';
           node.favorite = false;
           state.entries.append(node);
 

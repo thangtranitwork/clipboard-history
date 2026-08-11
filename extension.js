@@ -70,7 +70,10 @@ class ClipboardIndicator extends PanelMenu.Button {
     super._init(0, extension.indicatorName, false);
 
     this.extension = extension;
+    this.uuid = extension.uuid;
     this.settings = extension.getSettings();
+    this.currentPage = 1;
+    this.lastPastedTime = null;
 
     this._shortcutsBindingIds = [];
 
@@ -136,6 +139,8 @@ class ClipboardIndicator extends PanelMenu.Button {
       if (open) {
         this._setMenuWidth();
         this.searchEntry.set_text('');
+        this._updatePaginationButtonsState();
+        this._centerMenuOnScreen();
         this._searchFocusHackCallbackId = GLib.timeout_add(
           GLib.PRIORITY_DEFAULT,
           1,
@@ -177,7 +182,14 @@ class ClipboardIndicator extends PanelMenu.Button {
 
     this.menu.addMenuItem(this.scrollViewMenuSection);
 
+    this.lastPasteLabel = new St.Label({
+      text: _('Lần cuối paste: Chưa paste'),
+      style_class: 'ci-last-paste-info',
+    });
     this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    const lastPasteSection = new PopupMenu.PopupMenuSection();
+    lastPasteSection.actor.add_child(this.lastPasteLabel);
+    this.menu.addMenuItem(lastPasteSection);
 
     const actionsSection = new PopupMenu.PopupMenuSection();
     const actionsBox = new St.BoxLayout({
@@ -188,25 +200,32 @@ class ClipboardIndicator extends PanelMenu.Button {
     actionsSection.actor.add_child(actionsBox);
     this.menu.addMenuItem(actionsSection);
 
-    const prevPage = new PopupMenu.PopupBaseMenuItem();
-    prevPage.add_child(
+    this.prevPage = new PopupMenu.PopupBaseMenuItem();
+    this.prevPage.add_child(
       new St.Icon({
         icon_name: 'go-previous-symbolic',
         style_class: 'popup-menu-icon',
       }),
     );
-    prevPage.connect('activate', this._navigatePrevPage.bind(this));
-    actionsBox.add_child(prevPage);
+    this.prevPage.connect('activate', this._navigatePrevPage.bind(this));
+    actionsBox.add_child(this.prevPage);
 
-    const nextPage = new PopupMenu.PopupBaseMenuItem();
-    nextPage.add_child(
+    this.pageLabel = new St.Label({
+      text: '1/1',
+      style_class: 'ci-page-label',
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    actionsBox.add_child(this.pageLabel);
+
+    this.nextPage = new PopupMenu.PopupBaseMenuItem();
+    this.nextPage.add_child(
       new St.Icon({
         icon_name: 'go-next-symbolic',
         style_class: 'popup-menu-icon',
       }),
     );
-    nextPage.connect('activate', this._navigateNextPage.bind(this));
-    actionsBox.add_child(nextPage);
+    this.nextPage.connect('activate', this._navigateNextPage.bind(this));
+    actionsBox.add_child(this.nextPage);
 
     actionsBox.add_child(new St.BoxLayout({ x_expand: true }));
 
@@ -514,6 +533,24 @@ class ClipboardIndicator extends PanelMenu.Button {
     } else {
       throw new TypeError('Unknown type: ' + entry.type);
     }
+
+    if (!entry.timestamp) {
+      entry.timestamp = new Date();
+    }
+    const hours = String(entry.timestamp.getHours()).padStart(2, '0');
+    const mins = String(entry.timestamp.getMinutes()).padStart(2, '0');
+    const timeStr = `${hours}:${mins}`;
+
+    if (!menuItem.timeLabel) {
+      menuItem.timeLabel = new St.Label({
+        text: timeStr,
+        style_class: 'ci-timestamp',
+        y_align: Clutter.ActorAlign.CENTER,
+      });
+      (menuItem.actor || menuItem).add_child(menuItem.timeLabel);
+    } else {
+      menuItem.timeLabel.set_text(timeStr);
+    }
   }
 
 
@@ -632,6 +669,13 @@ class ClipboardIndicator extends PanelMenu.Button {
 
     entry.menuItem?.setOrnament(PopupMenu.Ornament.DOT);
     this._updateButtonText(entry);
+    this.lastPastedTime = new Date();
+    const hours = String(this.lastPastedTime.getHours()).padStart(2, '0');
+    const mins = String(this.lastPastedTime.getMinutes()).padStart(2, '0');
+    const secs = String(this.lastPastedTime.getSeconds()).padStart(2, '0');
+    if (this.lastPasteLabel) {
+      this.lastPasteLabel.set_text(`Lần cuối paste: ${hours}:${mins}:${secs}`);
+    }
     if (updateClipboard !== false) {
       if (entry.type === DS.TYPE_TEXT) {
         this._setClipboardText(entry.text);
@@ -660,7 +704,13 @@ class ClipboardIndicator extends PanelMenu.Button {
         try {
           const [, contents] = src.load_contents_finish(res);
           const bytes = GLib.Bytes.new(contents);
-          Clipboard.set_content(St.ClipboardType.CLIPBOARD, 'image/png', bytes);
+          const mimeType =
+            entry.imageFileName &&
+            (entry.imageFileName.endsWith('.jpg') ||
+              entry.imageFileName.endsWith('.jpeg'))
+              ? 'image/jpeg'
+              : 'image/png';
+          Clipboard.set_content(St.ClipboardType.CLIPBOARD, mimeType, bytes);
         } catch (e) {
           console.error(this.uuid, 'Error setting image to clipboard:', e);
         }
@@ -763,14 +813,71 @@ class ClipboardIndicator extends PanelMenu.Button {
    * Also note that the use of `last` and `next` is correct. Menu items are ordered from latest to
    * oldest whereas `entries` is ordered from oldest to latest.
    */
+  _centerMenuOnScreen() {
+    GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+      if (!this.menu || !this.menu.isOpen) {
+        return GLib.SOURCE_REMOVE;
+      }
+      const monitor = Main.layoutManager.primaryMonitor;
+      const actor = this.menu.actor || this.menu;
+      const width = actor.width || 350;
+      const height = actor.height || 400;
+      const x = Math.round(monitor.x + (monitor.width - width) / 2);
+      const y = Math.round(monitor.y + (monitor.height - height) / 2);
+      actor.set_position(x, y);
+      return GLib.SOURCE_REMOVE;
+    });
+  }
+
+  _updatePaginationButtonsState() {
+    const total = this.entries ? this.entries.length : 0;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (!this.currentPage || this.currentPage > totalPages) {
+      this.currentPage = totalPages;
+    }
+    if (this.currentPage < 1) {
+      this.currentPage = 1;
+    }
+
+    if (this.pageLabel) {
+      this.pageLabel.set_text(`${this.currentPage}/${totalPages}`);
+    }
+
+    if (this.prevPage) {
+      const hasPrev = this.currentPage > 1;
+      this.prevPage.reactive = hasPrev;
+      if (hasPrev) {
+        this.prevPage.remove_style_pseudo_class('disabled');
+      } else {
+        this.prevPage.add_style_pseudo_class('disabled');
+      }
+    }
+
+    if (this.nextPage) {
+      const hasNext = this.currentPage < totalPages;
+      this.nextPage.reactive = hasNext;
+      if (hasNext) {
+        this.nextPage.remove_style_pseudo_class('disabled');
+      } else {
+        this.nextPage.add_style_pseudo_class('disabled');
+      }
+    }
+  }
+
   _navigatePrevPage() {
+    if (this.currentPage > 1) {
+      this.currentPage--;
+    }
+
     if (this.searchEntryFront) {
       this.populateSearchResults(this.searchEntry.get_text(), false);
+      this._updatePaginationButtonsState();
       return;
     }
 
     const items = this.historySection._getMenuItems();
     if (items.length === 0) {
+      this._updatePaginationButtonsState();
       return;
     }
 
@@ -782,16 +889,25 @@ class ClipboardIndicator extends PanelMenu.Button {
     ) {
       this._rewriteMenuItem(items[i--], entry);
     }
+    this._updatePaginationButtonsState();
   }
 
   _navigateNextPage() {
+    const total = this.entries ? this.entries.length : 0;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (this.currentPage < totalPages) {
+      this.currentPage++;
+    }
+
     if (this.searchEntryFront) {
       this.populateSearchResults(this.searchEntry.get_text(), true);
+      this._updatePaginationButtonsState();
       return;
     }
 
     const items = this.historySection._getMenuItems();
     if (items.length === 0) {
+      this._updatePaginationButtonsState();
       return;
     }
 
@@ -803,6 +919,7 @@ class ClipboardIndicator extends PanelMenu.Button {
     ) {
       this._rewriteMenuItem(items[i++], entry);
     }
+    this._updatePaginationButtonsState();
   }
 
   _rewriteMenuItem(item, entry) {
@@ -917,30 +1034,31 @@ class ClipboardIndicator extends PanelMenu.Button {
   }
 
   _queryClipboard() {
-    if (this._shouldAbortClipboardQuery(St.Clipboard.CLIPBOARD)) {
+    if (this._shouldAbortClipboardQuery(St.ClipboardType.CLIPBOARD)) {
       return;
     }
 
     try {
-      Clipboard.get_content(St.ClipboardType.CLIPBOARD, 'image/png', (clip1, mime1, bytes1) => {
-        if (bytes1 && bytes1.get_size() > 0) {
-          this._processImageContent(bytes1, 'image/png', true);
-          return;
-        }
+      const mimetypes = Clipboard.get_mimetypes(St.ClipboardType.CLIPBOARD) || [];
+      const hasPng = mimetypes.includes('image/png');
+      const hasJpeg = mimetypes.includes('image/jpeg');
 
-        Clipboard.get_content(St.ClipboardType.CLIPBOARD, 'image/jpeg', (clip2, mime2, bytes2) => {
-          if (bytes2 && bytes2.get_size() > 0) {
-            this._processImageContent(bytes2, 'image/jpeg', true);
-            return;
+      if (hasPng || hasJpeg) {
+        const mime = hasPng ? 'image/png' : 'image/jpeg';
+        Clipboard.get_content(St.ClipboardType.CLIPBOARD, mime, (clip, bytes) => {
+          if (bytes && bytes.get_size() > 0) {
+            this._processImageContent(bytes, mime, true);
+          } else {
+            this._queryClipboardText();
           }
-
-          this._queryClipboardText();
         });
-      });
+        return;
+      }
     } catch (e) {
       console.log(this.uuid, 'Failed to query image content:', e);
-      this._queryClipboardText();
     }
+
+    this._queryClipboardText();
   }
 
   _queryClipboardText() {
@@ -1020,7 +1138,7 @@ class ClipboardIndicator extends PanelMenu.Button {
 
 
   _queryPrimaryClipboard() {
-    if (this._shouldAbortClipboardQuery(St.Clipboard.PRIMARY)) {
+    if (this._shouldAbortClipboardQuery(St.ClipboardType.PRIMARY)) {
       return;
     }
 

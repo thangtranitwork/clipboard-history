@@ -1,68 +1,61 @@
 # Gnome Clipboard History
 
-[Gnome Clipboard History](https://extensions.gnome.org/extension/4839/clipboard-history/) is a
-clipboard manager GNOME extension that saves what you've copied into an easily accessible,
-searchable history panel.
+[Gnome Clipboard History](https://github.com/thangtranitwork/clipboard-history) is an enhanced clipboard manager GNOME Shell extension created by **Trần Đoàn Xuân Thắng**. It saves text and image items you've copied into an easily accessible, searchable, screen-centered history panel.
 
-The extension is a rewrite of
-[Clipboard Indicator](https://github.com/Tudmotu/gnome-shell-extension-clipboard-indicator) with
-vastly improved performance, new features, and
-[bug fixes](https://github.com/Tudmotu/gnome-shell-extension-clipboard-indicator/pull/338).
+---
 
-A technical overview is available at https://alexsaveau.dev/blog/gch.
+## Key Features
 
-## Project status: replaced by Ringboard
+- 📸 **Direct Image Capture Support**: Automatically captures and thumbnails PNG/JPEG image content copied to the clipboard.
+- 🎯 **Centered Command Palette Layout**: Screen-centered overlay panel for fast navigation.
+- 🕒 **Timestamps & Last Paste Tracker**: Real-time copy timestamps (`HH:mm`) on items and dynamic tracking of your last pasted item (`Lần cuối paste: HH:mm:ss`).
+- 📄 **Pagination & Status Indicator**: Clear page counter (`Trang 1/N`) with active/disabled state feedback on Previous and Next buttons.
+- 🎨 **Modern Dark Glassmorphism Design**: Sleek dark UI with smooth hover highlights and rounded corners.
+- 🔍 **Fast Regex Search**: Instant searching across clipboard entries.
 
-Gnome Clipboard History is now in maintenance mode as it is being replaced by
-[Ringboard](https://github.com/SUPERCILEX/clipboard-history). I'm still accepting PRs for small
-improvements and bug fixes (such as supporting the latest Gnome version), but no new development
-will take place.
+---
 
-## Download
-
-[<img src="https://raw.githubusercontent.com/andyholmes/gnome-shell-extensions-badge/eb9af9a1c6f04eb060cb01de6aeb5c84232cd8c0/get-it-on-ego.svg?sanitize=true" alt="Get it on GNOME Extensions" height="100" align="middle">](https://extensions.gnome.org/extension/4839/clipboard-history/)
-
-## Tips
+## Tips & Shortcuts
 
 ![Tutorial screenshot](tutorial-screenshot.png)
 
 - Open the panel from anywhere with <kbd>Super</kbd> + <kbd>Shift</kbd> + <kbd>V</kbd>.
 - Modify shortcuts in settings or delete them by hitting backspace while editing a shortcut.
-- Use the `Only save favorites to disk` feature to wipe your non-favorited items on shutdown.
 - Use `Private mode` to temporarily stop processing copied items.
 - Use keyboard shortcuts while the panel is open:
-  - <kbd>Ctrl</kbd> + <kbd>N</kbd> where `N` is a number from 1 to 9 to select the Nth
-    non-favorited entry.
-  - <kbd>Super</kbd> + <kbd>Ctrl</kbd> + <kbd>N</kbd> where `N` is a number from 1 to 9 to select
-    the Nth favorited entry.
+  - <kbd>Ctrl</kbd> + <kbd>N</kbd> where `N` is a number from 1 to 9 to select the Nth non-favorited entry.
+  - <kbd>Super</kbd> + <kbd>Ctrl</kbd> + <kbd>N</kbd> where `N` is a number from 1 to 9 to select the Nth favorited entry.
   - <kbd>Ctrl</kbd> + <kbd>p/n</kbd> to navigate to the previous/next page.
   - <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>S</kbd> to open settings.
   - <kbd>/</kbd> to search.
   - <kbd>F</kbd> to (un)favorite a highlighted item.
 - Search uses case-insensitive [regex](https://regex101.com/?flavor=javascript).
 
-## Install from source
+---
 
-A note on versioning:
+## Install from Source
 
-- The `master` branch and `1.4.x` tags support GNOME 45.
-- The `pre-45` branch and `1.3.x` (or earlier) tags support GNOME 40-44.
+Supported GNOME Shell versions: **GNOME 45 – 50+**.
 
-### Build
+### 1. Build & Install
 
 ```shell
 cd ~/.local/share/gnome-shell/extensions/ && \
-  git clone https://github.com/SUPERCILEX/gnome-clipboard-history.git clipboard-history@alexsaveau.dev && \
+  git clone https://github.com/thangtranitwork/clipboard-history.git clipboard-history@alexsaveau.dev && \
   cd clipboard-history@alexsaveau.dev && \
   make
 ```
 
-### Restart GNOME
-
-<kbd>Alt</kbd> + <kbd>F2</kbd> then type `r`.
-
-### Install
+### 2. Enable Extension
 
 ```shell
 gnome-extensions enable clipboard-history@alexsaveau.dev
 ```
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).  
+Copyright (c) 2026 **Trần Đoàn Xuân Thắng**  
+Original base copyright (c) 2022 Alex Saveau, (c) 2014 Yotam Bar-On.
