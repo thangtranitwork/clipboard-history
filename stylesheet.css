@@ -32,3 +32,9 @@
 .ci-history-search-entry {
   width: 5em;
 }
+
+.clipboard-image-thumbnail {
+  border-radius: 4px;
+  margin-right: 8px;
+}
+

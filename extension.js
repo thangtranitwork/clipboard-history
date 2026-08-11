@@ -470,8 +470,7 @@ class ClipboardIndicator extends PanelMenu.Button {
 
   _updateButtonText(entry) {
     if (
-      !(TOPBAR_DISPLAY_MODE === 1 || TOPBAR_DISPLAY_MODE === 2) ||
-      (entry && entry.type !== DS.TYPE_TEXT)
+      !(TOPBAR_DISPLAY_MODE === 1 || TOPBAR_DISPLAY_MODE === 2)
     ) {
       return;
     }
@@ -479,7 +478,11 @@ class ClipboardIndicator extends PanelMenu.Button {
     if (PRIVATE_MODE) {
       this._buttonText.set_text('…');
     } else if (entry) {
-      this._buttonText.set_text(this._truncated(entry.text, MAX_TOPBAR_LENGTH));
+      if (entry.type === DS.TYPE_TEXT) {
+        this._buttonText.set_text(this._truncated(entry.text, MAX_TOPBAR_LENGTH));
+      } else if (entry.type === DS.TYPE_IMAGE) {
+        this._buttonText.set_text('📷');
+      }
     } else {
       this._buttonText.set_text('');
     }
@@ -487,12 +490,29 @@ class ClipboardIndicator extends PanelMenu.Button {
 
   _setEntryLabel(menuItem) {
     const entry = menuItem.entry;
+    if (entry.imageIcon) {
+      entry.imageIcon.destroy();
+      entry.imageIcon = null;
+    }
     if (entry.type === DS.TYPE_TEXT) {
       menuItem.label.set_text(this._truncated(entry.text, MAX_VISIBLE_CHARS));
+    } else if (entry.type === DS.TYPE_IMAGE) {
+      menuItem.label.set_text(_('[Image]'));
+      if (entry.imagePath && GLib.file_test(entry.imagePath, GLib.FileTest.EXISTS)) {
+        const file = Gio.File.new_for_path(entry.imagePath);
+        const icon = new St.Icon({
+          gicon: Gio.FileIcon.new(file),
+          icon_size: 32,
+          style_class: 'clipboard-image-thumbnail',
+        });
+        menuItem.actor.insert_child_at_index(icon, 1);
+        entry.imageIcon = icon;
+      }
     } else {
       throw new TypeError('Unknown type: ' + entry.type);
     }
   }
+
 
   _favoriteToggle(menuItem) {
     const entry = menuItem.entry;
@@ -519,7 +539,11 @@ class ClipboardIndicator extends PanelMenu.Button {
     } else {
       entry.diskId = this.nextDiskId++;
 
-      Store.storeTextEntry(entry.text);
+      if (entry.type === DS.TYPE_TEXT) {
+        Store.storeTextEntry(entry.text);
+      } else if (entry.type === DS.TYPE_IMAGE) {
+        Store.storeImageEntry(entry.imageFileName);
+      }
       Store.updateFavoriteStatus(entry.diskId, true);
     }
   }
@@ -568,6 +592,11 @@ class ClipboardIndicator extends PanelMenu.Button {
       if (entry.diskId) {
         Store.deleteTextEntry(entry.diskId, entry.favorite);
       }
+      if (entry.type === DS.TYPE_IMAGE && entry.imagePath) {
+        try {
+          Gio.File.new_for_path(entry.imagePath).delete_async(0, null, null);
+        } catch (e) {}
+      }
     }
 
     if (entry.id === this.currentlySelectedEntry?.id) {
@@ -603,6 +632,8 @@ class ClipboardIndicator extends PanelMenu.Button {
     if (updateClipboard !== false) {
       if (entry.type === DS.TYPE_TEXT) {
         this._setClipboardText(entry.text);
+      } else if (entry.type === DS.TYPE_IMAGE) {
+        this._setClipboardImage(entry);
       } else {
         throw new TypeError('Unknown type: ' + entry.type);
       }
@@ -610,6 +641,29 @@ class ClipboardIndicator extends PanelMenu.Button {
       if (PASTE_ON_SELECTION && triggerPaste) {
         this._triggerPasteHack();
       }
+    }
+  }
+
+  _setClipboardImage(entry) {
+    if (!entry.imagePath || !GLib.file_test(entry.imagePath, GLib.FileTest.EXISTS)) {
+      return;
+    }
+    if (this._debouncing !== undefined) {
+      this._debouncing++;
+    }
+    try {
+      const file = Gio.File.new_for_path(entry.imagePath);
+      file.load_contents_async(null, (src, res) => {
+        try {
+          const [, contents] = src.load_contents_finish(res);
+          const bytes = GLib.Bytes.new(contents);
+          Clipboard.set_content(St.ClipboardType.CLIPBOARD, 'image/png', bytes);
+        } catch (e) {
+          console.error(this.uuid, 'Error setting image to clipboard:', e);
+        }
+      });
+    } catch (e) {
+      console.error(this.uuid, 'Failed to set clipboard image:', e);
     }
   }
 
@@ -864,10 +918,105 @@ class ClipboardIndicator extends PanelMenu.Button {
       return;
     }
 
+    try {
+      const mimetypes = Clipboard.get_mimetypes(St.ClipboardType.CLIPBOARD);
+      const hasImage = mimetypes && (
+        mimetypes.includes('image/png') ||
+        mimetypes.includes('image/jpeg') ||
+        mimetypes.includes('image/bmp')
+      );
+
+      if (hasImage) {
+        const mime = mimetypes.includes('image/png') ? 'image/png' : (mimetypes.includes('image/jpeg') ? 'image/jpeg' : 'image/bmp');
+        Clipboard.get_content(St.ClipboardType.CLIPBOARD, mime, (_, bytes) => {
+          if (bytes && bytes.get_size() > 0) {
+            this._processImageContent(bytes, mime, true);
+          } else {
+            this._queryClipboardText();
+          }
+        });
+        return;
+      }
+    } catch (e) {
+      console.log(this.uuid, 'Failed to query mimetypes:', e);
+    }
+
+    this._queryClipboardText();
+  }
+
+  _queryClipboardText() {
     Clipboard.get_text(St.ClipboardType.CLIPBOARD, (_, text) => {
       this._processClipboardContent(text, true);
     });
   }
+
+  _processImageContent(bytes, mimeType, selectEntry) {
+    if (this._debouncing > 0) {
+      this._debouncing--;
+      return;
+    }
+
+    const data = bytes.toArray();
+    let hashVal = 0;
+    const len = data.length;
+    for (let i = 0; i < len; i += Math.max(1, Math.floor(len / 1000))) {
+      hashVal = (hashVal << 5) - hashVal + data[i];
+      hashVal |= 0;
+    }
+    const hash = 'img_' + len + '_' + Math.abs(hashVal);
+    const fileName = hash + '.png';
+    const imagesDir = GLib.build_filenamev([GLib.get_user_cache_dir(), this.uuid, 'images']);
+    GLib.mkdir_with_parents(imagesDir, 0o775);
+    const filePath = GLib.build_filenamev([imagesDir, fileName]);
+
+    let entry =
+      this.entries.findImageItem(hash) ||
+      this.favoriteEntries.findImageItem(hash);
+
+    if (entry) {
+      const isFirst =
+        entry === this.entries.last() || entry === this.favoriteEntries.last();
+      if (!isFirst) {
+        this._moveEntryFirst(entry);
+      }
+      if (selectEntry && (!isFirst || entry !== this.currentlySelectedEntry)) {
+        this._selectEntry(entry, false);
+      }
+    } else {
+      try {
+        GLib.file_set_contents(filePath, data);
+      } catch (e) {
+        console.error(this.uuid, 'Failed to save image file:', e);
+        return;
+      }
+
+      entry = new DS.LLNode();
+      entry.id = this.nextId++;
+      entry.diskId = CACHE_ONLY_FAVORITES ? undefined : this.nextDiskId++;
+      entry.type = DS.TYPE_IMAGE;
+      entry.imageFileName = fileName;
+      entry.imagePath = filePath;
+      entry.imageHash = hash;
+      entry.favorite = false;
+
+      this.entries.append(entry);
+      this._addEntry(entry, selectEntry, false, 0);
+
+      if (!CACHE_ONLY_FAVORITES) {
+        Store.storeImageEntry(fileName);
+      }
+      this._pruneOldestEntries();
+    }
+
+    if (NOTIFY_ON_COPY) {
+      this._showNotification(_('Copied image to clipboard'), null, (notif) => {
+        notif.addAction(_('Cancel'), () =>
+          this._deleteEntryAndRestoreLatest(this.currentlySelectedEntry),
+        );
+      });
+    }
+  }
+
 
   _queryPrimaryClipboard() {
     if (this._shouldAbortClipboardQuery(St.Clipboard.PRIMARY)) {

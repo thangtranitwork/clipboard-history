@@ -2,6 +2,8 @@
 // https://github.com/wooorm/linked-list/blob/d2390fe1cab9f780cfd34fa31c8fa8ede4ad674d/index.js
 
 export const TYPE_TEXT = 'text';
+export const TYPE_IMAGE = 'image';
+
 
 // Creates a new `Iterator` for looping over the `List`.
 class Iterator {
@@ -221,6 +223,8 @@ export class LLNode {
   _hash() {
     if (this.type === TYPE_TEXT) {
       return _hashText(this.text);
+    } else if (this.type === TYPE_IMAGE) {
+      return this.imageHash || this.imageFileName;
     } else {
       return null;
     }
@@ -354,6 +358,22 @@ export class LinkedList {
     }
     return null;
   }
+
+  findImageItem(hash) {
+    const entries = this.invertedIndex[hash];
+    if (!entries) {
+      return null;
+    }
+
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const item = this.idsToItems[entries[i]];
+      if (item.type === TYPE_IMAGE && (item.imageHash === hash || item.imageFileName === hash)) {
+        return item;
+      }
+    }
+    return null;
+  }
+
 
   // Creates an iterator from the list.
   [Symbol.iterator]() {

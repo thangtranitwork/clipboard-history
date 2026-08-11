@@ -20,6 +20,7 @@ const OLD_REGISTRY_FILE = GLib.build_filenamev([
  *   on the order in which these add ops are discovered.
  */
 let DATABASE_FILE;
+let IMAGES_DIR;
 const BYTE_ORDER = Gio.DataStreamByteOrder.LITTLE_ENDIAN;
 
 // Don't use zero b/c DataInputStream uses 0 as its error value
@@ -28,6 +29,8 @@ const OP_TYPE_DELETE_TEXT = 2;
 const OP_TYPE_FAVORITE_ITEM = 3;
 const OP_TYPE_UNFAVORITE_ITEM = 4;
 const OP_TYPE_MOVE_ITEM_TO_END = 5;
+const OP_TYPE_SAVE_IMAGE = 6;
+
 
 const MAX_WASTED_OPS = 500;
 let uselessOpCount;
@@ -40,6 +43,7 @@ export function init(uuid) {
   EXTENSION_UUID = uuid;
   CACHE_DIR = GLib.build_filenamev([GLib.get_user_cache_dir(), EXTENSION_UUID]);
   DATABASE_FILE = GLib.build_filenamev([CACHE_DIR, 'database.log']);
+  IMAGES_DIR = GLib.build_filenamev([CACHE_DIR, 'images']);
 
   if (GLib.mkdir_with_parents(CACHE_DIR, 0o775) !== 0) {
     console.log(
@@ -48,7 +52,9 @@ export function init(uuid) {
       CACHE_DIR,
     );
   }
+  GLib.mkdir_with_parents(IMAGES_DIR, 0o775);
 }
+
 
 export function destroy() {
   _pushToOpQueue((resolve) => {
@@ -174,6 +180,28 @@ function _consumeStream(stream, state, callback) {
           state.entries.append(entry);
         }
       });
+    } else if (opType === OP_TYPE_SAVE_IMAGE) {
+      stream.read_upto_async(
+        /*stop_chars=*/ '\0',
+        /*stop_chars_len=*/ 1,
+        0,
+        null,
+        (src, res) => {
+          const [imageFileName] = src.read_upto_finish(res);
+          src.read_byte(null);
+
+          const node = new DS.LLNode();
+          node.diskId = node.id = state.nextId++;
+          node.type = DS.TYPE_IMAGE;
+          node.imageFileName = imageFileName || '';
+          node.imagePath = GLib.build_filenamev([IMAGES_DIR, imageFileName || '']);
+          node.imageHash = imageFileName ? imageFileName.replace('.png', '') : '';
+          node.favorite = false;
+          state.entries.append(node);
+
+          loop();
+        },
+      );
     } else {
       console.log(EXTENSION_UUID, 'Unknown op type, aborting load.', opType);
       finish();
@@ -346,6 +374,8 @@ export function resetDatabase(currentStateBuilder) {
 
             if (entry.type === DS.TYPE_TEXT) {
               _storeTextOp(entry.text)(dataStream);
+            } else if (entry.type === DS.TYPE_IMAGE) {
+              _storeImageOp(entry.imageFileName)(dataStream);
             } else {
               throw new TypeError('Unknown type: ' + entry.type);
             }
@@ -376,6 +406,20 @@ function _storeTextOp(text) {
     return true;
   };
 }
+
+export function storeImageEntry(imageFileName) {
+  _appendBytesToLog(_storeImageOp(imageFileName), -5);
+}
+
+function _storeImageOp(imageFileName) {
+  return (dataStream) => {
+    dataStream.put_byte(OP_TYPE_SAVE_IMAGE, null);
+    dataStream.put_string(imageFileName, null);
+    dataStream.put_byte(0, null); // NUL terminator
+    return true;
+  };
+}
+
 
 export function deleteTextEntry(id, isFavorite) {
   _appendBytesToLog(_deleteTextOp(id), 5);
