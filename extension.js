@@ -508,7 +508,7 @@ class ClipboardIndicator extends PanelMenu.Button {
           icon_size: 32,
           style_class: 'clipboard-image-thumbnail',
         });
-        menuItem.actor.insert_child_at_index(icon, 1);
+        (menuItem.actor || menuItem).insert_child_at_index(icon, 1);
         entry.imageIcon = icon;
       }
     } else {
@@ -922,29 +922,25 @@ class ClipboardIndicator extends PanelMenu.Button {
     }
 
     try {
-      const mimetypes = Clipboard.get_mimetypes(St.ClipboardType.CLIPBOARD);
-      const hasImage = mimetypes && (
-        mimetypes.includes('image/png') ||
-        mimetypes.includes('image/jpeg') ||
-        mimetypes.includes('image/bmp')
-      );
+      Clipboard.get_content(St.ClipboardType.CLIPBOARD, 'image/png', (clip1, mime1, bytes1) => {
+        if (bytes1 && bytes1.get_size() > 0) {
+          this._processImageContent(bytes1, 'image/png', true);
+          return;
+        }
 
-      if (hasImage) {
-        const mime = mimetypes.includes('image/png') ? 'image/png' : (mimetypes.includes('image/jpeg') ? 'image/jpeg' : 'image/bmp');
-        Clipboard.get_content(St.ClipboardType.CLIPBOARD, mime, (clipboard, mimeType, bytes) => {
-          if (bytes && bytes.get_size() > 0) {
-            this._processImageContent(bytes, mimeType, true);
-          } else {
-            this._queryClipboardText();
+        Clipboard.get_content(St.ClipboardType.CLIPBOARD, 'image/jpeg', (clip2, mime2, bytes2) => {
+          if (bytes2 && bytes2.get_size() > 0) {
+            this._processImageContent(bytes2, 'image/jpeg', true);
+            return;
           }
-        });
-        return;
-      }
-    } catch (e) {
-      console.log(this.uuid, 'Failed to query mimetypes:', e);
-    }
 
-    this._queryClipboardText();
+          this._queryClipboardText();
+        });
+      });
+    } catch (e) {
+      console.log(this.uuid, 'Failed to query image content:', e);
+      this._queryClipboardText();
+    }
   }
 
   _queryClipboardText() {
