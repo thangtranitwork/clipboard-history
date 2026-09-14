@@ -25,6 +25,16 @@ export function openConfirmDialog(
   }
 }
 
+/** WARN-05 fix: call when the extension is disabled to prevent dangling dialog references */
+export function destroyConfirmDialog() {
+  if (_openDialog) {
+    try {
+      _openDialog.close();
+    } catch (_) {}
+    _openDialog = null;
+  }
+}
+
 const ConfirmDialog = GObject.registerClass(
   class ConfirmDialog extends ModalDialog.ModalDialog {
     _init(title, desc, ok_label, cancel_label, callback) {

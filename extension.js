@@ -22,7 +22,7 @@ import { ensureActorVisibleInScrollView } from 'resource:///org/gnome/shell/misc
 
 import * as Store from './store.js';
 import * as DS from './dataStructures.js';
-import { openConfirmDialog } from './confirmDialog.js';
+import { openConfirmDialog, destroyConfirmDialog } from './confirmDialog.js';
 import SettingsFields from './settingsFields.js';
 
 const Clipboard = St.Clipboard.get_default();
@@ -453,9 +453,15 @@ class ClipboardIndicator extends PanelMenu.Button {
     });
 
     menuItem.connect('destroy', () => {
-      delete menuItem.entry.menuItem;
-      if (!menuItem.entry.favorite) {
-        this.activeHistoryMenuItems--;
+      if (menuItem._imageIcon) {
+        menuItem._imageIcon.destroy();
+        menuItem._imageIcon = null;
+      }
+      if (menuItem.entry) {
+        delete menuItem.entry.menuItem;
+        if (!menuItem.entry.favorite) {
+          this.activeHistoryMenuItems--;
+        }
       }
     });
     menuItem.connect('key-focus-in', () => {
@@ -511,11 +517,23 @@ class ClipboardIndicator extends PanelMenu.Button {
   }
 
   _setEntryLabel(menuItem) {
-    const entry = menuItem.entry;
-    if (entry.imageIcon) {
-      entry.imageIcon.destroy();
-      entry.imageIcon = null;
+    if (menuItem._imageIcon) {
+      menuItem._imageIcon.destroy();
+      menuItem._imageIcon = null;
     }
+    const actor = menuItem.actor || menuItem;
+    const children = actor.get_children ? actor.get_children() : [];
+    for (const child of children) {
+      if (
+        child !== menuItem.label &&
+        child.has_style_class_name &&
+        child.has_style_class_name('clipboard-image-thumbnail')
+      ) {
+        child.destroy();
+      }
+    }
+
+    const entry = menuItem.entry;
     if (entry.type === DS.TYPE_TEXT) {
       menuItem.label.set_text(this._truncated(entry.text, MAX_VISIBLE_CHARS));
     } else if (entry.type === DS.TYPE_IMAGE) {
@@ -527,8 +545,8 @@ class ClipboardIndicator extends PanelMenu.Button {
           icon_size: 32,
           style_class: 'clipboard-image-thumbnail',
         });
-        (menuItem.actor || menuItem).insert_child_at_index(icon, 1);
-        entry.imageIcon = icon;
+        actor.insert_child_at_index(icon, 1);
+        menuItem._imageIcon = icon;
       }
     } else {
       throw new TypeError('Unknown type: ' + entry.type);
@@ -558,10 +576,13 @@ class ClipboardIndicator extends PanelMenu.Button {
     const entry = menuItem.entry;
     const wasSelected = this.currentlySelectedEntry?.id === entry.id;
 
-    // Move to front (end of list)
-    (entry.favorite ? this.entries : this.favoriteEntries).append(entry);
-    this._removeEntry(entry);
+    // BUG-05 fix: flip favorite flag FIRST before any list/UI ops
+    // so that all subsequent operations see the correct state.
     entry.favorite = !entry.favorite;
+
+    // Move to the correct list (end = most recent)
+    (entry.favorite ? this.favoriteEntries : this.entries).append(entry);
+    this._removeEntry(entry);
     this._addEntry(entry, wasSelected, false, 0);
     this._maybeRestoreMenuPages();
     global.stage.set_key_focus(entry.menuItem);
@@ -712,10 +733,18 @@ class ClipboardIndicator extends PanelMenu.Button {
               : 'image/png';
           Clipboard.set_content(St.ClipboardType.CLIPBOARD, mimeType, bytes);
         } catch (e) {
+          // WARN-01 fix: release debounce token so future copies are not silently dropped
+          if (this._debouncing > 0) {
+            this._debouncing--;
+          }
           console.error(this.uuid, 'Error setting image to clipboard:', e);
         }
       });
     } catch (e) {
+      // WARN-01 fix: release debounce token on synchronous failure as well
+      if (this._debouncing > 0) {
+        this._debouncing--;
+      }
       console.error(this.uuid, 'Failed to set clipboard image:', e);
     }
   }
@@ -927,6 +956,10 @@ class ClipboardIndicator extends PanelMenu.Button {
       item.setOrnament(PopupMenu.Ornament.NONE);
     }
 
+    if (item.entry && item.entry !== entry) {
+      delete item.entry.menuItem;
+    }
+
     item.entry = entry;
     entry.menuItem = item;
 
@@ -992,6 +1025,23 @@ class ClipboardIndicator extends PanelMenu.Button {
               match - 40,
               match + MAX_VISIBLE_CHARS - 40,
             ),
+          );
+        }
+      } else if (entry.type === DS.TYPE_IMAGE) {
+        const queryLower = query.toLowerCase();
+        if (
+          queryLower.includes('image') ||
+          queryLower.includes('img') ||
+          queryLower.includes('ảnh') ||
+          queryLower.includes('anh') ||
+          (entry.imageFileName &&
+            entry.imageFileName.toLowerCase().includes(queryLower))
+        ) {
+          this._addEntry(
+            entry,
+            entry === this.currentlySelectedEntry,
+            false,
+            forward ? undefined : 0,
           );
         }
       } else {
@@ -1116,6 +1166,7 @@ class ClipboardIndicator extends PanelMenu.Button {
       entry.imageFileName = fileName;
       entry.imagePath = filePath;
       entry.imageHash = hash;
+      entry.imageSize = len; // BUG-01 fix: track byte size so MAX_BYTES applies to images
       entry.favorite = false;
 
       this.entries.append(entry);
@@ -1145,8 +1196,10 @@ class ClipboardIndicator extends PanelMenu.Button {
     Clipboard.get_text(St.ClipboardType.PRIMARY, (_, text) => {
       const last = this.entries.last();
       text = this._processClipboardContent(text, false);
+      // BUG-03 fix: only compare text entries — image entries have no .text property
       if (
         last &&
+        last.type === DS.TYPE_TEXT &&
         text &&
         text.length !== last.text.length &&
         (text.endsWith(last.text) ||
@@ -1420,9 +1473,14 @@ class ClipboardIndicator extends PanelMenu.Button {
       if (CACHE_ONLY_FAVORITES) {
         Store.resetDatabase(this._currentStateBuilder.bind(this));
       } else {
+        // BUG-02 fix: handle both TYPE_TEXT and TYPE_IMAGE when re-enabling cache-all
         for (const entry of this.entries) {
           entry.diskId = this.nextDiskId++;
-          Store.storeTextEntry(entry.text);
+          if (entry.type === DS.TYPE_TEXT) {
+            Store.storeTextEntry(entry.text);
+          } else if (entry.type === DS.TYPE_IMAGE) {
+            Store.storeImageEntry(entry.imageFileName);
+          }
         }
       }
     }
@@ -1538,12 +1596,22 @@ class ClipboardIndicator extends PanelMenu.Button {
   }
 
   _previousEntry() {
+    // BUG-04 fix: guard against undefined currentlySelectedEntry (empty history)
+    if (!this.currentlySelectedEntry) {
+      this._selectNextPrevEntry(this.entries.head);
+      return;
+    }
     this._selectNextPrevEntry(
       this.currentlySelectedEntry.nextCyclic() || this.entries.head,
     );
   }
 
   _nextEntry() {
+    // BUG-04 fix: guard against undefined currentlySelectedEntry (empty history)
+    if (!this.currentlySelectedEntry) {
+      this._selectNextPrevEntry(this.entries.last());
+      return;
+    }
     this._selectNextPrevEntry(
       this.currentlySelectedEntry.prevCyclic() || this.entries.last(),
     );
@@ -1612,6 +1680,7 @@ export default class ClipboardHistoryExtension extends Extension {
   }
 
   disable() {
+    destroyConfirmDialog(); // WARN-05 fix: close any open confirm dialog before teardown
     this.clipboardIndicator.destroy();
     this.clipboardIndicator = undefined;
 

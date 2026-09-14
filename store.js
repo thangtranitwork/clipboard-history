@@ -148,7 +148,13 @@ function _consumeStream(stream, state, callback) {
       uselessOpCount += 2;
       parseAvailableAware(4, () => {
         const id = stream.read_uint32(null);
-        (state.entries.findById(id) || state.favorites.findById(id)).detach();
+        // BUG-06 fix: findById can return undefined for orphaned DELETE ops in a corrupt log
+        const entry = state.entries.findById(id) || state.favorites.findById(id);
+        if (entry) {
+          entry.detach();
+        } else {
+          console.log(EXTENSION_UUID, 'DELETE op references unknown id:', id, '(skipping)');
+        }
       });
     } else if (opType === OP_TYPE_FAVORITE_ITEM) {
       parseAvailableAware(4, () => {
@@ -197,6 +203,19 @@ function _consumeStream(stream, state, callback) {
           node.imagePath = GLib.build_filenamev([IMAGES_DIR, imageFileName || '']);
           node.imageHash = imageFileName ? imageFileName.replace(/\.[^/.]+$/, '') : '';
           node.favorite = false;
+
+          // BUG-01 fix: track image file size so MAX_BYTES applies to images loaded from disk
+          try {
+            const fileInfo = Gio.File.new_for_path(node.imagePath).query_info(
+              'standard::size',
+              Gio.FileQueryInfoFlags.NONE,
+              null,
+            );
+            node.imageSize = fileInfo.get_size();
+          } catch (_) {
+            // File may not exist yet or be inaccessible; imageSize stays undefined
+          }
+
           state.entries.append(node);
 
           loop();
