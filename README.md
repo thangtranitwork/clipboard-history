@@ -6,7 +6,7 @@
 
 ## Key Features
 
-- 📸 **Direct Image Capture Support**: Automatically captures and thumbnails PNG/JPEG image content copied to the clipboard.
+- 📸 **Direct Image Capture & Floating Preview**: Automatically captures images, thumbnails them with dimension tags (`WIDTH×HEIGHT`), and displays a sleek high-res floating preview card with image metadata (format badge, resolution, file size, timestamp) on hover or keyboard focus.
 - 🎯 **Centered Command Palette Layout**: Screen-centered overlay panel for fast navigation.
 - 🕒 **Timestamps & Last Paste Tracker**: Real-time copy timestamps (`HH:mm`) on items and dynamic tracking of your last pasted item (`Lần cuối paste: HH:mm:ss`).
 - 📄 **Pagination & Status Indicator**: Clear page counter (`Trang 1/N`) with active/disabled state feedback on Previous and Next buttons.

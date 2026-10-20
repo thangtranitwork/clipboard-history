@@ -160,18 +160,24 @@ function _consumeStream(stream, state, callback) {
       parseAvailableAware(4, () => {
         const id = stream.read_uint32(null);
         const entry = state.entries.findById(id);
-
-        entry.favorite = true;
-        state.favorites.append(entry);
+        if (entry) {
+          entry.favorite = true;
+          state.favorites.append(entry);
+        } else {
+          console.log(EXTENSION_UUID, 'FAVORITE op references unknown id:', id, '(skipping)');
+        }
       });
     } else if (opType === OP_TYPE_UNFAVORITE_ITEM) {
       uselessOpCount += 2;
       parseAvailableAware(4, () => {
         const id = stream.read_uint32(null);
         const entry = state.favorites.findById(id);
-
-        entry.favorite = false;
-        state.entries.append(entry);
+        if (entry) {
+          entry.favorite = false;
+          state.entries.append(entry);
+        } else {
+          console.log(EXTENSION_UUID, 'UNFAVORITE op references unknown id:', id, '(skipping)');
+        }
       });
     } else if (opType === OP_TYPE_MOVE_ITEM_TO_END) {
       uselessOpCount++;
@@ -179,11 +185,14 @@ function _consumeStream(stream, state, callback) {
         const id = stream.read_uint32(null);
         const entry =
           state.entries.findById(id) || state.favorites.findById(id);
-
-        if (entry.favorite) {
-          state.favorites.append(entry);
+        if (entry) {
+          if (entry.favorite) {
+            state.favorites.append(entry);
+          } else {
+            state.entries.append(entry);
+          }
         } else {
-          state.entries.append(entry);
+          console.log(EXTENSION_UUID, 'MOVE op references unknown id:', id, '(skipping)');
         }
       });
     } else if (opType === OP_TYPE_SAVE_IMAGE) {
@@ -248,7 +257,7 @@ function _consumeStream(stream, state, callback) {
         };
 
         addEntry('Your clipboard data has been corrupted and was moved to:');
-        addEntry('~/.cache/clipboard-history@alexsaveau.dev/corrupted.log');
+        addEntry('~/.cache/clipboard-history@local/corrupted.log');
         addEntry('Please file a bug report at:');
         addEntry(
           'https://github.com/SUPERCILEX/gnome-clipboard-history/issues/new?assignees=&labels=bug&template=1-bug.md',

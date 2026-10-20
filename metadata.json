@@ -1,9 +1,10 @@
 {
   "description": "Enhanced GNOME Shell clipboard history extension with image support, centered palette layout, timestamps, and quick search.",
-  "gettext-domain": "clipboard-history@alexsaveau.dev",
+  "gettext-domain": "clipboard-history@local",
   "name": "Clipboard History",
   "settings-schema": "org.gnome.shell.extensions.clipboard-history",
   "shell-version": [
+    "45",
     "46",
     "47",
     "48",
@@ -11,6 +12,6 @@
     "50"
   ],
   "url": "https://github.com/thangtranitwork/clipboard-history",
-  "uuid": "clipboard-history@alexsaveau.dev",
+  "uuid": "clipboard-history@local",
   "version": 48
 }

@@ -188,12 +188,14 @@ export class LLNode {
       return;
     }
 
+    let bytesCount = 0;
     if (this.type === TYPE_TEXT) {
-      this.list.bytes += this.text.length;
+      bytesCount = this.text ? this.text.length : 0;
     } else if (this.type === TYPE_IMAGE && this.imageSize) {
-      // BUG-01 fix: count image bytes so MAX_BYTES limit is respected for images too
-      this.list.bytes += this.imageSize;
+      bytesCount = this.imageSize;
     }
+    this._indexedBytes = bytesCount;
+    this.list.bytes += bytesCount;
 
     let entries = this.list.invertedIndex[hash];
     if (!entries) {
@@ -210,18 +212,21 @@ export class LLNode {
       return;
     }
 
-    if (this.type === TYPE_TEXT) {
-      this.list.bytes -= this.text.length;
-    } else if (this.type === TYPE_IMAGE && this.imageSize) {
-      // BUG-01 fix: release image bytes from the byte counter
-      this.list.bytes -= this.imageSize;
+    if (this._indexedBytes) {
+      this.list.bytes = Math.max(0, this.list.bytes - this._indexedBytes);
+      this._indexedBytes = 0;
     }
 
     const entries = this.list.invertedIndex[hash];
-    if (entries.length === 1) {
-      delete this.list.invertedIndex[hash];
-    } else {
-      entries.splice(entries.indexOf(this.id), 1);
+    if (entries) {
+      if (entries.length === 1) {
+        delete this.list.invertedIndex[hash];
+      } else {
+        const idx = entries.indexOf(this.id);
+        if (idx !== -1) {
+          entries.splice(idx, 1);
+        }
+      }
     }
     delete this.list.idsToItems[this.id];
   }

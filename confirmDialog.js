@@ -15,13 +15,15 @@ export function openConfirmDialog(
   callback,
 ) {
   if (!_openDialog) {
-    _openDialog = new ConfirmDialog(
+    const dialog = new ConfirmDialog(
       title,
       message + '\n' + sub_message,
       ok_label,
       cancel_label,
       callback,
-    ).open();
+    );
+    _openDialog = dialog;
+    dialog.open();
   }
 }
 

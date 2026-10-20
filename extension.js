@@ -23,6 +23,7 @@ import { ensureActorVisibleInScrollView } from 'resource:///org/gnome/shell/misc
 import * as Store from './store.js';
 import * as DS from './dataStructures.js';
 import { openConfirmDialog, destroyConfirmDialog } from './confirmDialog.js';
+import { ImagePreview } from './imagePreview.js';
 import SettingsFields from './settingsFields.js';
 
 const Clipboard = St.Clipboard.get_default();
@@ -95,6 +96,7 @@ class ClipboardIndicator extends PanelMenu.Button {
     this.add_child(hbox);
 
     this._fetchSettings();
+    this._imagePreview = new ImagePreview();
     this._buildMenu();
     this._updateTopbarLayout();
   }
@@ -103,6 +105,16 @@ class ClipboardIndicator extends PanelMenu.Button {
     this._disconnectSettings();
     this._unbindShortcuts();
     this._disconnectSelectionListener();
+
+    if (this._notifSource) {
+      this._notifSource.destroy();
+      this._notifSource = undefined;
+    }
+
+    if (this._imagePreview) {
+      this._imagePreview.destroy();
+      this._imagePreview = null;
+    }
 
     if (this._searchFocusHackCallbackId) {
       GLib.Source.source_remove(this._searchFocusHackCallbackId);
@@ -150,6 +162,8 @@ class ClipboardIndicator extends PanelMenu.Button {
             return false;
           },
         );
+      } else {
+        this._imagePreview?.hideImmediate();
       }
     });
 
@@ -162,7 +176,23 @@ class ClipboardIndicator extends PanelMenu.Button {
       style_class: 'ci-history-menu-section',
       overlay_scrollbars: true,
     });
+    const connectScrollListener = (scrollView) => {
+      const vAdj =
+        scrollView.vadjustment ??
+        (scrollView.get_vadjustment ? scrollView.get_vadjustment() : null) ??
+        scrollView.vscroll?.adjustment;
+      if (vAdj?.connect) {
+        vAdj.connect('notify::value', () => {
+          this._imagePreview?.onScroll(scrollView);
+        });
+      }
+      scrollView.connect('scroll-event', () => {
+        this._imagePreview?.onScroll(scrollView);
+      });
+    };
+
     favoritesScrollView.add_child(this.favoritesSection.actor);
+    connectScrollListener(favoritesScrollView);
 
     this.scrollViewFavoritesMenuSection.actor.add_child(favoritesScrollView);
     this.menu.addMenuItem(this.scrollViewFavoritesMenuSection);
@@ -177,6 +207,7 @@ class ClipboardIndicator extends PanelMenu.Button {
       overlay_scrollbars: true,
     });
     this.historyScrollView.add_child(this.historySection.actor);
+    connectScrollListener(this.historyScrollView);
 
     this.scrollViewMenuSection.actor.add_child(this.historyScrollView);
 
@@ -311,6 +342,7 @@ class ClipboardIndicator extends PanelMenu.Button {
         clearMenuItem.connect('activate', this._removeAll.bind(this));
 
         this._setupSelectionChangeListener();
+        this._cleanOrphanedImages();
       },
     );
   }
@@ -407,6 +439,22 @@ class ClipboardIndicator extends PanelMenu.Button {
       this._handleMenuItemKeyEvent(event, menuItem),
     );
 
+    const actor = menuItem.actor || menuItem;
+    actor.connect('notify::hover', () => {
+      if (actor.hover) {
+        if (menuItem.entry?.type === DS.TYPE_IMAGE) {
+          this._imagePreview?.show(menuItem.entry, menuItem, this.menu.actor);
+        } else {
+          this._imagePreview?.hideImmediate();
+        }
+      } else {
+        this._imagePreview?.scheduleHide();
+      }
+    });
+    menuItem.connect('key-focus-out', () => {
+      this._imagePreview?.scheduleHide();
+    });
+
     this._setEntryLabel(menuItem);
 
     // Favorite button
@@ -468,6 +516,11 @@ class ClipboardIndicator extends PanelMenu.Button {
       if (!menuItem.entry.favorite) {
         ensureActorVisibleInScrollView(this.historyScrollView, menuItem);
       }
+      if (menuItem.entry?.type === DS.TYPE_IMAGE) {
+        this._imagePreview?.show(menuItem.entry, menuItem, this.menu.actor);
+      } else {
+        this._imagePreview?.hideImmediate();
+      }
     });
 
     if (entry.favorite) {
@@ -509,7 +562,7 @@ class ClipboardIndicator extends PanelMenu.Button {
       if (entry.type === DS.TYPE_TEXT) {
         this._buttonText.set_text(this._truncated(entry.text, MAX_TOPBAR_LENGTH));
       } else if (entry.type === DS.TYPE_IMAGE) {
-        this._buttonText.set_text('📷');
+        this._buttonText.set_text(_('[Image]'));
       }
     } else {
       this._buttonText.set_text('');
@@ -537,12 +590,17 @@ class ClipboardIndicator extends PanelMenu.Button {
     if (entry.type === DS.TYPE_TEXT) {
       menuItem.label.set_text(this._truncated(entry.text, MAX_VISIBLE_CHARS));
     } else if (entry.type === DS.TYPE_IMAGE) {
-      menuItem.label.set_text(_('[Image]'));
+      this._imagePreview?.ensureMetadata(entry);
+      const dimText =
+        entry.imageWidth && entry.imageHeight
+          ? ` ${entry.imageWidth}×${entry.imageHeight}`
+          : '';
+      menuItem.label.set_text(`${_('[Image]')}${dimText}`);
       if (entry.imagePath && GLib.file_test(entry.imagePath, GLib.FileTest.EXISTS)) {
         const file = Gio.File.new_for_path(entry.imagePath);
         const icon = new St.Icon({
           gicon: Gio.FileIcon.new(file),
-          icon_size: 32,
+          icon_size: 40,
           style_class: 'clipboard-image-thumbnail',
         });
         actor.insert_child_at_index(icon, 1);
@@ -635,18 +693,80 @@ class ClipboardIndicator extends PanelMenu.Button {
   }
 
   _clearHistory() {
+    this._imagePreview?.hideImmediate();
     if (this.currentlySelectedEntry && !this.currentlySelectedEntry.favorite) {
       this._resetSelectedMenuItem(true);
     }
 
     // Favorites aren't touched when clearing history
+    for (const entry of this.entries) {
+      if (entry.type === DS.TYPE_IMAGE && entry.imagePath) {
+        try {
+          Gio.File.new_for_path(entry.imagePath).delete_async(0, null, null);
+        } catch (e) {}
+      }
+    }
+
     this.entries = new DS.LinkedList();
     this.historySection.removeAll();
 
     Store.resetDatabase(this._currentStateBuilder.bind(this));
+    this._cleanOrphanedImages();
+  }
+
+  _cleanOrphanedImages() {
+    try {
+      const activeFiles = new Set();
+      if (this.entries) {
+        for (const entry of this.entries) {
+          if (entry.type === DS.TYPE_IMAGE && entry.imageFileName) {
+            activeFiles.add(entry.imageFileName);
+          }
+        }
+      }
+      if (this.favoriteEntries) {
+        for (const entry of this.favoriteEntries) {
+          if (entry.type === DS.TYPE_IMAGE && entry.imageFileName) {
+            activeFiles.add(entry.imageFileName);
+          }
+        }
+      }
+
+      const imagesDir = GLib.build_filenamev([
+        GLib.get_user_cache_dir(),
+        this.uuid,
+        'images',
+      ]);
+      const dir = Gio.File.new_for_path(imagesDir);
+      if (!dir.query_exists(null)) {
+        return;
+      }
+
+      dir.enumerate_children_async(
+        'standard::name',
+        Gio.FileQueryInfoFlags.NONE,
+        GLib.PRIORITY_LOW,
+        null,
+        (d, res) => {
+          try {
+            const enumerator = d.enumerate_children_finish(res);
+            let fileInfo;
+            while ((fileInfo = enumerator.next_file(null)) !== null) {
+              const name = fileInfo.get_name();
+              if (!activeFiles.has(name)) {
+                d.get_child(name).delete_async(0, null, null);
+              }
+            }
+          } catch (_) {}
+        },
+      );
+    } catch (_) {}
   }
 
   _removeEntry(entry, fullyDelete, humanGenerated) {
+    if (this._imagePreview?._currentEntry?.id === entry.id) {
+      this._imagePreview?.hideImmediate();
+    }
     if (fullyDelete) {
       entry.detach();
 
@@ -751,11 +871,13 @@ class ClipboardIndicator extends PanelMenu.Button {
 
   _setClipboardText(text) {
     if (this._debouncing !== undefined) {
-      this._debouncing++;
+      this._debouncing += PROCESS_PRIMARY_SELECTION ? 2 : 1;
     }
 
     Clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
-    Clipboard.set_text(St.ClipboardType.PRIMARY, text);
+    if (PROCESS_PRIMARY_SELECTION) {
+      Clipboard.set_text(St.ClipboardType.PRIMARY, text);
+    }
   }
 
   _triggerPasteHack() {
@@ -894,6 +1016,7 @@ class ClipboardIndicator extends PanelMenu.Button {
   }
 
   _navigatePrevPage() {
+    this._imagePreview?.hideImmediate();
     if (this.currentPage > 1) {
       this.currentPage--;
     }
@@ -922,6 +1045,7 @@ class ClipboardIndicator extends PanelMenu.Button {
   }
 
   _navigateNextPage() {
+    this._imagePreview?.hideImmediate();
     const total = this.entries ? this.entries.length : 0;
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (this.currentPage < totalPages) {
@@ -970,6 +1094,7 @@ class ClipboardIndicator extends PanelMenu.Button {
   }
 
   _onSearchTextChanged() {
+    this._imagePreview?.hideImmediate();
     const query = this.searchEntry.get_text();
 
     if (!query) {
@@ -987,7 +1112,7 @@ class ClipboardIndicator extends PanelMenu.Button {
   }
 
   populateSearchResults(query, forward) {
-    if (!this.searchEntryFront) {
+    if (!this.searchEntryFront && (!this.favoriteEntries || this.favoriteEntries.length === 0)) {
       return;
     }
 
@@ -1003,15 +1128,62 @@ class ClipboardIndicator extends PanelMenu.Button {
     try {
       searchExp = new RegExp(query, 'i');
     } catch {}
-    const start = forward ? this.searchEntryFront : this.searchEntryBack;
-    let entry = start;
 
-    while (this.activeHistoryMenuItems < PAGE_SIZE) {
+    const matchesQuery = (entry) => {
       if (entry.type === DS.TYPE_TEXT) {
         let match = entry.text.toLowerCase().indexOf(query);
         if (searchExp && match < 0) {
           match = entry.text.search(searchExp);
         }
+        return match;
+      } else if (entry.type === DS.TYPE_IMAGE) {
+        this._imagePreview?.ensureMetadata(entry);
+        const queryLower = query.toLowerCase();
+        const dimStr =
+          entry.imageWidth && entry.imageHeight
+            ? `${entry.imageWidth}x${entry.imageHeight}`
+            : '';
+        if (
+          queryLower.includes('image') ||
+          queryLower.includes('img') ||
+          queryLower.includes('ảnh') ||
+          queryLower.includes('anh') ||
+          (dimStr && dimStr.includes(queryLower)) ||
+          (entry.imageFileName &&
+            entry.imageFileName.toLowerCase().includes(queryLower))
+        ) {
+          return 0;
+        }
+        return -1;
+      }
+      return -1;
+    };
+
+    // First search and populate matching favorites
+    if (this.favoriteEntries) {
+      for (let fav = this.favoriteEntries.last(); fav; fav = fav.prev) {
+        const match = matchesQuery(fav);
+        if (match >= 0) {
+          this._addEntry(fav, fav === this.currentlySelectedEntry, false);
+          if (fav.type === DS.TYPE_TEXT && fav.menuItem?.label) {
+            fav.menuItem.label.set_text(
+              this._truncated(
+                fav.text,
+                match - 40,
+                match + MAX_VISIBLE_CHARS - 40,
+              ),
+            );
+          }
+        }
+      }
+    }
+
+    const start = forward ? this.searchEntryFront : this.searchEntryBack;
+    let entry = start;
+
+    if (entry) {
+      while (this.activeHistoryMenuItems < PAGE_SIZE) {
+        const match = matchesQuery(entry);
         if (match >= 0) {
           this._addEntry(
             entry,
@@ -1019,47 +1191,30 @@ class ClipboardIndicator extends PanelMenu.Button {
             false,
             forward ? undefined : 0,
           );
-          entry.menuItem.label.set_text(
-            this._truncated(
-              entry.text,
-              match - 40,
-              match + MAX_VISIBLE_CHARS - 40,
-            ),
-          );
+          if (entry.type === DS.TYPE_TEXT && entry.menuItem?.label) {
+            entry.menuItem.label.set_text(
+              this._truncated(
+                entry.text,
+                match - 40,
+                match + MAX_VISIBLE_CHARS - 40,
+              ),
+            );
+          }
         }
-      } else if (entry.type === DS.TYPE_IMAGE) {
-        const queryLower = query.toLowerCase();
-        if (
-          queryLower.includes('image') ||
-          queryLower.includes('img') ||
-          queryLower.includes('ảnh') ||
-          queryLower.includes('anh') ||
-          (entry.imageFileName &&
-            entry.imageFileName.toLowerCase().includes(queryLower))
-        ) {
-          this._addEntry(
-            entry,
-            entry === this.currentlySelectedEntry,
-            false,
-            forward ? undefined : 0,
-          );
+
+        entry = forward ? entry.prevCyclic() : entry.nextCyclic();
+        if (entry === start) {
+          break;
         }
+      }
+
+      if (forward) {
+        this.searchEntryBack = this.searchEntryFront.nextCyclic();
+        this.searchEntryFront = entry;
       } else {
-        throw new TypeError('Unknown type: ' + entry.type);
+        this.searchEntryFront = this.searchEntryBack.prevCyclic();
+        this.searchEntryBack = entry;
       }
-
-      entry = forward ? entry.prevCyclic() : entry.nextCyclic();
-      if (entry === start) {
-        break;
-      }
-    }
-
-    if (forward) {
-      this.searchEntryBack = this.searchEntryFront.nextCyclic();
-      this.searchEntryFront = entry;
-    } else {
-      this.searchEntryFront = this.searchEntryBack.prevCyclic();
-      this.searchEntryBack = entry;
     }
   }
 
@@ -1068,16 +1223,19 @@ class ClipboardIndicator extends PanelMenu.Button {
       return true;
     }
 
-    if (
-      IGNORE_PASSWORD_MIMES &&
-      (Clipboard.get_mimetypes(kind) || []).includes(
-        // Note that we should check for the value "secret" but there don't appear to be any other
-        // values so it's not worth the trouble right now.
+    if (IGNORE_PASSWORD_MIMES) {
+      const mimetypes = Clipboard.get_mimetypes(kind) || [];
+      const passwordMimes = [
         'x-kde-passwordManagerHint',
-      )
-    ) {
-      console.log(this.uuid, 'Ignoring password entry.');
-      return true;
+        'text/x-moz-concealed-entry',
+        'application/x-secret',
+        'application/x-keepassxc-selection',
+        'application/x-gnome-secrets',
+      ];
+      if (passwordMimes.some((mime) => mimetypes.includes(mime))) {
+        console.log(this.uuid, 'Ignoring password entry.');
+        return true;
+      }
     }
 
     return false;
@@ -1123,20 +1281,29 @@ class ClipboardIndicator extends PanelMenu.Button {
       return;
     }
 
-    const data = bytes.toArray();
-    let hashVal = 0;
-    const len = data.length;
-    for (let i = 0; i < len; i += Math.max(1, Math.floor(len / 1000))) {
-      hashVal = (hashVal << 5) - hashVal + data[i];
-      hashVal |= 0;
-    }
-    const hash = 'img_' + len + '_' + Math.abs(hashVal);
-    const fileName = hash + '.png';
-    const imagesDir = GLib.build_filenamev([GLib.get_user_cache_dir(), this.uuid, 'images']);
+    const len = bytes.get_size();
+    const checksum = GLib.compute_checksum_for_bytes(
+      GLib.ChecksumType.SHA256,
+      bytes,
+    );
+    const hash = 'img_' + len + '_' + checksum.substring(0, 16);
+    const ext = mimeType === 'image/jpeg' ? '.jpg' : '.png';
+    const fileName = hash + ext;
+    const imagesDir = GLib.build_filenamev([
+      GLib.get_user_cache_dir(),
+      this.uuid,
+      'images',
+    ]);
     GLib.mkdir_with_parents(imagesDir, 0o775);
     const filePath = GLib.build_filenamev([imagesDir, fileName]);
 
-    console.log(this.uuid, 'Processing image content, hash:', hash, 'path:', filePath);
+    console.log(
+      this.uuid,
+      'Processing image content, hash:',
+      hash,
+      'path:',
+      filePath,
+    );
 
     let entry =
       this.entries.findImageItem(hash) ||
@@ -1152,12 +1319,22 @@ class ClipboardIndicator extends PanelMenu.Button {
         this._selectEntry(entry, false);
       }
     } else {
-      try {
-        GLib.file_set_contents(filePath, data);
-      } catch (e) {
-        console.error(this.uuid, 'Failed to save image file:', e);
-        return;
-      }
+      const file = Gio.File.new_for_path(filePath);
+      file.replace_contents_bytes_async(
+        bytes,
+        null,
+        false,
+        Gio.FileCreateFlags.REPLACE_DESTINATION,
+        null,
+        (f, res) => {
+          try {
+            f.replace_contents_finish(res);
+            this._imagePreview?.ensureMetadata(entry);
+          } catch (e) {
+            console.error(this.uuid, 'Failed to save image file:', e);
+          }
+        },
+      );
 
       entry = new DS.LLNode();
       entry.id = this.nextId++;
@@ -1169,6 +1346,33 @@ class ClipboardIndicator extends PanelMenu.Button {
       entry.imageSize = len; // BUG-01 fix: track byte size so MAX_BYTES applies to images
       entry.favorite = false;
 
+      // Extract PNG dimensions immediately from header if available
+      if (mimeType === 'image/png' && len >= 24) {
+        try {
+          const header = bytes.new_sub(0, 24).toArray();
+          if (
+            header[0] === 0x89 &&
+            header[1] === 0x50 &&
+            header[2] === 0x4e &&
+            header[3] === 0x47
+          ) {
+            entry.imageWidth =
+              ((header[16] << 24) |
+                (header[17] << 16) |
+                (header[18] << 8) |
+                header[19]) >>>
+              0;
+            entry.imageHeight =
+              ((header[20] << 24) |
+                (header[21] << 16) |
+                (header[22] << 8) |
+                header[23]) >>>
+              0;
+            entry.imageFormat = 'PNG';
+          }
+        } catch (_) {}
+      }
+
       this.entries.append(entry);
       this._addEntry(entry, selectEntry, false, 0);
 
@@ -1179,7 +1383,12 @@ class ClipboardIndicator extends PanelMenu.Button {
     }
 
     if (NOTIFY_ON_COPY) {
-      this._showNotification(_('Copied image to clipboard'), null, (notif) => {
+      this._imagePreview?.ensureMetadata(entry);
+      const dimInfo =
+        entry.imageWidth && entry.imageHeight
+          ? `${entry.imageWidth} × ${entry.imageHeight}`
+          : null;
+      this._showNotification(_('Copied image to clipboard'), dimInfo, (notif) => {
         notif.addAction(_('Cancel'), () =>
           this._deleteEntryAndRestoreLatest(this.currentlySelectedEntry),
         );
@@ -1625,6 +1834,13 @@ class ClipboardIndicator extends PanelMenu.Button {
     this._selectEntry(entry, true);
     if (entry.type === DS.TYPE_TEXT) {
       this._showNotification(_('Copied'), entry.text);
+    } else if (entry.type === DS.TYPE_IMAGE) {
+      this._imagePreview?.ensureMetadata(entry);
+      const dimInfo =
+        entry.imageWidth && entry.imageHeight
+          ? ` (${entry.imageWidth} × ${entry.imageHeight})`
+          : '';
+      this._showNotification(_('Copied'), _('Image') + dimInfo);
     }
   }
 
